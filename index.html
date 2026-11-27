@@ -52,7 +52,7 @@
       <div class="tot a big"><small>Abi</small><b id="tA">$0.00</b></div>
       <div class="tot j"><small>Joint</small><b id="tJ">$0.00</b></div>
     </div>
-    <div class="bar"><select id="period"></select><button id="reload" title="Recargar">↻</button></div>
+    <div class="bar"><select id="period"></select><select id="source" title="Fuente"></select><button id="reload" title="Recargar">↻</button></div>
     <div class="chips" id="chips"></div>
   </header>
   <main id="list"></main>
@@ -64,7 +64,7 @@
 const {CLIENT_ID, SHEET_ID, TAB} = window.CFG;
 const API = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}`;
 const OWN = ["Sergio","Abi","Joint"], CLS = {Sergio:"s", Abi:"a", Joint:"j"};
-let token = null, tokenClient = null, rows = [], filter = "Todos";
+let token = null, tokenClient = null, rows = [], filter = "Todos", srcFilter = "Todas";
 const $ = id => document.getElementById(id);
 const money = n => (n<0?"-":"") + "$" + Math.abs(n).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -88,12 +88,14 @@ async function g(path, opt={}) {
 
 async function load() {
   const d = await g(`/values/${TAB}!A2:I?valueRenderOption=FORMULA`);
-  rows = (d.values||[]).map((r,i) => ({row:i+2, date:r[0], titular:r[2], desc:r[3]||"", razon:parseRazon(r[4]), amt:Number(r[5])||0, owner:r[6]||r[2]||"Sergio", key:r[7]||"", period:r[8]||"(sin periodo)"}))
+  rows = (d.values||[]).map((r,i) => ({row:i+2, date:r[0], titular:r[2], desc:r[3]||"", razon:parseRazon(r[4]), amt:Number(r[5])||0, owner:r[6]||r[2]||"Sergio", key:r[7]||"", period:r[8]||"(sin periodo)", fuente:r[1]||""}))
                        .filter(r => r.key);
   const periods = [...new Set(rows.map(r=>r.period))].sort().reverse();
   const cur = $("period").value;
   $("period").innerHTML = periods.map(p=>`<option>${esc(p)}</option>`).join("");
   $("period").value = periods.includes(cur) ? cur : periods[0];
+  const srcs = ["Todas", ...new Set(rows.map(r=>r.fuente).filter(Boolean))], sc = $("source").value || srcFilter;
+  $("source").innerHTML = srcs.map(p=>`<option>${esc(p)}</option>`).join(""); $("source").value = srcs.includes(sc) ? sc : "Todas"; srcFilter = $("source").value;
   render();
 }
 
@@ -102,10 +104,10 @@ function render() {
   const sum = o => inP.filter(r=>r.owner===o).reduce((a,r)=>a+r.amt,0);
   $("tS").textContent = money(sum("Sergio")); $("tA").textContent = money(sum("Abi")); $("tJ").textContent = money(sum("Joint"));
   $("chips").innerHTML = ["Todos",...OWN].map(f => `<button class="chip ${f===filter?"on":""}" data-f="${f}">${f==="Todos"?"Todos ("+inP.length+")":f+" ("+inP.filter(r=>r.owner===f).length+")"}</button>`).join("");
-  const shown = inP.filter(r => filter==="Todos" || r.owner===filter).sort((a,b)=> (b.date>a.date?1:b.date<a.date?-1:b.row-a.row));
+  const shown = inP.filter(r => (filter==="Todos" || r.owner===filter) && (srcFilter==="Todas" || r.fuente===srcFilter)).sort((a,b)=> (b.date>a.date?1:b.date<a.date?-1:b.row-a.row));
   $("list").innerHTML = shown.map(r => `
     <div class="row ${CLS[r.owner]}" data-row="${r.row}">
-      <div class="top"><span class="date">${esc(fmtDate(r.date))} · ${esc(r.titular||"")}</span><span class="amt ${r.amt<0?"neg":""}">${money(r.amt)}</span></div>
+      <div class="top"><span class="date">${esc(fmtDate(r.date))} · ${esc(r.fuente)} · ${esc(r.titular||"")}</span><span class="amt ${r.amt<0?"neg":""}">${money(r.amt)}</span></div>
       <div class="razon">${r.razon.url ? `<a href="${esc(r.razon.url)}" target="_blank" rel="noopener">${esc(r.razon.text)}</a>` : esc(r.razon.text)}</div>
       ${r.razon.text !== r.desc ? `<div class="desc">${esc(r.desc)}</div>` : ""}
       <div class="seg">${OWN.map(o=>`<button class="${CLS[o]} ${o===r.owner?"on":""}" data-o="${o}">${o}</button>`).join("")}</div>
@@ -125,6 +127,7 @@ async function setOwner(rowNum, owner) {
 $("list").addEventListener("click", e => { const b = e.target.closest("button[data-o]"); if (b) setOwner(+b.closest(".row").dataset.row, b.dataset.o); });
 $("chips").addEventListener("click", e => { const b = e.target.closest(".chip"); if (b) { filter = b.dataset.f; render(); } });
 $("period").addEventListener("change", render);
+$("source").addEventListener("change", () => { srcFilter = $("source").value; render(); });
 $("reload").addEventListener("click", () => load().catch(e=>err(e.message)));
 
 function showLogin(){ $("login").classList.remove("hide"); $("app").classList.add("hide"); }
