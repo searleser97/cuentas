@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111827">
+<title>Cuentas</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --muted:#94a3b8; --txt:#f1f5f9; --s:#38bdf8; --a:#f472b6; --j:#fbbf24; --line:#334155; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; background:var(--bg); color:var(--txt); font:16px/1.35 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; padding-bottom:env(safe-area-inset-bottom); }
+  header { position:sticky; top:0; z-index:5; background:var(--bg); padding:10px 12px 8px; padding-top:calc(10px + env(safe-area-inset-top)); border-bottom:1px solid var(--line); }
+  .totals { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+  .tot { background:var(--card); border-radius:12px; padding:8px 10px; border-top:3px solid var(--c); }
+  .tot small { display:block; color:var(--muted); font-size:12px; }
+  .tot b { font-size:19px; font-variant-numeric:tabular-nums; }
+  .tot.s { --c:var(--s); } .tot.a { --c:var(--a); } .tot.j { --c:var(--j); }
+  .tot.big b { font-size:22px; }
+  .bar { display:flex; gap:8px; margin-top:8px; align-items:center; }
+  select, button { font:inherit; color:var(--txt); background:var(--card); border:1px solid var(--line); border-radius:10px; padding:9px 10px; }
+  select { flex:1; min-width:0; }
+  .chips { display:flex; gap:6px; margin-top:8px; overflow-x:auto; }
+  .chip { white-space:nowrap; padding:7px 12px; border-radius:999px; font-size:14px; }
+  .chip.on { background:var(--txt); color:var(--bg); border-color:var(--txt); }
+  main { padding:10px 12px 40px; max-width:720px; margin:0 auto; }
+  .row { background:var(--card); border-radius:14px; padding:11px 12px; margin-bottom:9px; border-left:5px solid var(--c); }
+  .row.s { --c:var(--s); } .row.a { --c:var(--a); } .row.j { --c:var(--j); }
+  .top { display:flex; justify-content:space-between; gap:10px; align-items:baseline; }
+  .date { color:var(--muted); font-size:13px; }
+  .amt { font-weight:700; font-variant-numeric:tabular-nums; font-size:18px; white-space:nowrap; }
+  .amt.neg { color:#4ade80; }
+  .razon { margin:3px 0 2px; word-break:break-word; }
+  .razon a { color:#7dd3fc; }
+  .desc { color:var(--muted); font-size:12px; word-break:break-word; }
+  .seg { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-top:9px; }
+  .seg button { padding:11px 4px; font-weight:600; border-radius:10px; }
+  .seg button.on.s { background:var(--s); color:#04283a; border-color:var(--s); }
+  .seg button.on.a { background:var(--a); color:#3b0720; border-color:var(--a); }
+  .seg button.on.j { background:var(--j); color:#3a2a00; border-color:var(--j); }
+  #login { text-align:center; padding:60px 20px; }
+  #login button { background:#fff; color:#111; font-weight:600; padding:13px 20px; }
+  #msg { position:fixed; left:12px; right:12px; bottom:calc(12px + env(safe-area-inset-bottom)); background:#7f1d1d; padding:10px 12px; border-radius:10px; display:none; z-index:9; }
+  .hide { display:none !important; }
+</style>
+</head>
+<body>
+<div id="login"><h2>Cuentas</h2><p style="color:var(--muted)">Inicia sesión con Google para ver las transacciones.</p><button id="signin">Sign in with Google</button></div>
+<div id="app" class="hide">
+  <header>
+    <div class="totals">
+      <div class="tot s big"><small>Sergio</small><b id="tS">$0.00</b></div>
+      <div class="tot a big"><small>Abi</small><b id="tA">$0.00</b></div>
+      <div class="tot j"><small>Joint</small><b id="tJ">$0.00</b></div>
+    </div>
+    <div class="bar"><select id="period"></select><button id="reload" title="Recargar">↻</button></div>
+    <div class="chips" id="chips"></div>
+  </header>
+  <main id="list"></main>
+</div>
+<div id="msg"></div>
+<script src="config.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+const {CLIENT_ID, SHEET_ID, TAB} = window.CFG;
+const API = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}`;
+const OWN = ["Sergio","Abi","Joint"], CLS = {Sergio:"s", Abi:"a", Joint:"j"};
+let token = null, tokenClient = null, rows = [], filter = "Todos";
+const $ = id => document.getElementById(id);
+const money = n => (n<0?"-":"") + "$" + Math.abs(n).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function err(m){ const e=$("msg"); e.textContent=m; e.style.display="block"; setTimeout(()=>e.style.display="none",5000); }
+
+function fmtDate(v){ // sheet serial -> "Oct 8" ; strings pass through
+  if (typeof v === "number") { const d = new Date(Date.UTC(1899,11,30) + v*864e5); return d.toLocaleDateString("es-MX",{month:"short",day:"numeric",timeZone:"UTC"}); }
+  return v || "";
+}
+function parseRazon(v){ // =HYPERLINK("url","text") -> {text,url}
+  const m = /^=HYPERLINK\("((?:[^"]|"")*)","((?:[^"]|"")*)"\)$/.exec(v||"");
+  return m ? {url:m[1].replace(/""/g,'"'), text:m[2].replace(/""/g,'"')} : {text:v||"", url:null};
+}
+
+async function g(path, opt={}) {
+  const r = await fetch(API + path, {...opt, headers:{Authorization:"Bearer "+token, "Content-Type":"application/json", ...(opt.headers||{})}});
+  if (r.status === 401) { token = null; sessionStorage.removeItem("tok"); showLogin(); throw new Error("Sesión expirada"); }
+  if (!r.ok) throw new Error((await r.json().catch(()=>({}))).error?.message || r.status);
+  return r.json();
+}
+
+async function load() {
+  const d = await g(`/values/${TAB}!A2:I?valueRenderOption=FORMULA`);
+  rows = (d.values||[]).map((r,i) => ({row:i+2, date:r[0], titular:r[2], desc:r[3]||"", razon:parseRazon(r[4]), amt:Number(r[5])||0, owner:r[6]||r[2]||"Sergio", key:r[7]||"", period:r[8]||"(sin periodo)"}))
+                       .filter(r => r.key);
+  const periods = [...new Set(rows.map(r=>r.period))].sort().reverse();
+  const cur = $("period").value;
+  $("period").innerHTML = periods.map(p=>`<option>${esc(p)}</option>`).join("");
+  $("period").value = periods.includes(cur) ? cur : periods[0];
+  render();
+}
+
+function render() {
+  const p = $("period").value, inP = rows.filter(r => r.period === p);
+  const sum = o => inP.filter(r=>r.owner===o).reduce((a,r)=>a+r.amt,0);
+  $("tS").textContent = money(sum("Sergio")); $("tA").textContent = money(sum("Abi")); $("tJ").textContent = money(sum("Joint"));
+  $("chips").innerHTML = ["Todos",...OWN].map(f => `<button class="chip ${f===filter?"on":""}" data-f="${f}">${f==="Todos"?"Todos ("+inP.length+")":f+" ("+inP.filter(r=>r.owner===f).length+")"}</button>`).join("");
+  const shown = inP.filter(r => filter==="Todos" || r.owner===filter).sort((a,b)=> (b.date>a.date?1:b.date<a.date?-1:b.row-a.row));
+  $("list").innerHTML = shown.map(r => `
+    <div class="row ${CLS[r.owner]}" data-row="${r.row}">
+      <div class="top"><span class="date">${esc(fmtDate(r.date))} · ${esc(r.titular||"")}</span><span class="amt ${r.amt<0?"neg":""}">${money(r.amt)}</span></div>
+      <div class="razon">${r.razon.url ? `<a href="${esc(r.razon.url)}" target="_blank" rel="noopener">${esc(r.razon.text)}</a>` : esc(r.razon.text)}</div>
+      ${r.razon.text !== r.desc ? `<div class="desc">${esc(r.desc)}</div>` : ""}
+      <div class="seg">${OWN.map(o=>`<button class="${CLS[o]} ${o===r.owner?"on":""}" data-o="${o}">${o}</button>`).join("")}</div>
+    </div>`).join("") || `<p style="color:var(--muted);text-align:center">Sin transacciones.</p>`;
+}
+
+async function setOwner(rowNum, owner) {
+  const r = rows.find(x=>x.row===rowNum); if (!r || r.owner===owner) return;
+  const prev = r.owner; r.owner = owner; render();       // optimistic
+  try {
+    const chk = await g(`/values/${TAB}!H${rowNum}`);     // guard: row must still be the same transaction
+    if ((chk.values?.[0]?.[0]) !== r.key) throw new Error("La hoja cambió, recargando…");
+    await g(`/values/${TAB}!G${rowNum}?valueInputOption=RAW`, {method:"PUT", body:JSON.stringify({values:[[owner]]})});
+  } catch(e) { r.owner = prev; render(); err(e.message); if (/cambió/.test(e.message)) load(); }
+}
+
+$("list").addEventListener("click", e => { const b = e.target.closest("button[data-o]"); if (b) setOwner(+b.closest(".row").dataset.row, b.dataset.o); });
+$("chips").addEventListener("click", e => { const b = e.target.closest(".chip"); if (b) { filter = b.dataset.f; render(); } });
+$("period").addEventListener("change", render);
+$("reload").addEventListener("click", () => load().catch(e=>err(e.message)));
+
+function showLogin(){ $("login").classList.remove("hide"); $("app").classList.add("hide"); }
+async function start(){ $("login").classList.add("hide"); $("app").classList.remove("hide"); try { await load(); } catch(e){ err(e.message); } }
+function initAuth(){
+  tokenClient = google.accounts.oauth2.initTokenClient({ client_id:CLIENT_ID, scope:"https://www.googleapis.com/auth/spreadsheets",
+    callback: resp => { if (resp.error) return err(resp.error); token = resp.access_token; sessionStorage.setItem("tok", JSON.stringify({t:token, exp:Date.now()+(resp.expires_in-60)*1000})); start(); } });
+  $("signin").onclick = () => tokenClient.requestAccessToken({prompt:""});
+  const saved = JSON.parse(sessionStorage.getItem("tok")||"null");
+  if (saved && saved.exp > Date.now()) { token = saved.t; start(); }
+}
+const wait = setInterval(() => { if (window.google?.accounts?.oauth2) { clearInterval(wait); initAuth(); } }, 100);
+</script>
+</body>
+</html>
